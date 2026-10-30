@@ -291,9 +291,11 @@
   }
 
   // 무료 엔진(Pollinations) — API 키가 필요 없어 숨길 키 자체가 없음
-  async function callAi(prompt){
+  function sleep(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
+
+  async function callAiOnce(prompt, timeoutMs){
     var ctrl = new AbortController();
-    var tid = setTimeout(function(){ ctrl.abort(); }, 12000);
+    var tid = setTimeout(function(){ ctrl.abort(); }, timeoutMs);
     try {
       var res = await fetch("https://text.pollinations.ai/openai", {
         method: "POST",
@@ -315,6 +317,16 @@
       return parsed;
     } finally {
       clearTimeout(tid);
+    }
+  }
+
+  // 무료 엔진은 가끔 바쁘거나 응답이 흔들릴 때가 있어서, 실패하면 잠깐 쉬었다가 한 번 더 시도
+  async function callAi(prompt){
+    try {
+      return await callAiOnce(prompt, 15000);
+    } catch (e1){
+      await sleep(1200);
+      return await callAiOnce(prompt, 20000);
     }
   }
 
@@ -356,17 +368,40 @@
     }
     resultBox.classList.add("show");
     addHistory(rawMeta, data);
+    speakText(lastMeaning); // 결과가 뜨면 글과 함께 자동으로 소리내어 읽어줌
   }
 
-  function showError(msg){
-    errBox.textContent = msg;
+  function speakText(text){
+    if (!text || !("speechSynthesis" in window)) return;
+    try {
+      window.speechSynthesis.cancel();
+      var u = new SpeechSynthesisUtterance(text);
+      u.lang = "ko-KR";
+      window.speechSynthesis.speak(u);
+    } catch(e){}
+  }
+
+  function showError(msg, retryable){
+    errBox.innerHTML = "";
+    var p = document.createElement("div");
+    p.textContent = msg;
+    errBox.appendChild(p);
+    if (retryable){
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "minibtn";
+      btn.style.marginTop = "10px";
+      btn.textContent = "다시 시도";
+      btn.addEventListener("click", runConversion);
+      errBox.appendChild(btn);
+    }
     errBox.classList.add("show");
     resultBox.classList.remove("show");
   }
 
-  goBtn.addEventListener("click", async function(){
+  async function runConversion(){
     var text = inputBox.value.trim();
-    if (!text){ showError("먼저 뜻을 알고 싶은 말을 적어주세요."); return; }
+    if (!text){ showError("먼저 뜻을 알고 싶은 말을 적어주세요.", false); return; }
     goBtn.disabled = true;
     spinner.classList.add("show");
     goLabel.textContent = "찾아보는 중...";
@@ -375,13 +410,15 @@
       var data = await callAi(buildPrompt());
       renderResult(data, { cat: state.cat, lang: state.lang === "기타" ? (customLang.value.trim()||"기타") : state.lang, text: text });
     } catch(err){
-      showError("지금 뜻을 찾는 데 문제가 생겼어요. 인터넷 연결을 확인하시고 다시 시도해주세요.");
+      showError("지금 뜻을 찾는 데 문제가 생겼어요. 아래 버튼으로 다시 시도해보시거나, 인터넷 연결을 확인해주세요.", true);
     } finally {
       goBtn.disabled = false;
       spinner.classList.remove("show");
       goLabel.textContent = "쉬운 말로 바꾸기";
     }
-  });
+  }
+
+  goBtn.addEventListener("click", runConversion);
 
   copyBtn.addEventListener("click", async function(){
     try { await navigator.clipboard.writeText(lastMeaning); copyBtn.textContent = "복사됨!"; }
@@ -389,15 +426,7 @@
     setTimeout(function(){ copyBtn.textContent = "결과 복사"; }, 1600);
   });
 
-  speakBtn.addEventListener("click", function(){
-    if (!lastMeaning || !("speechSynthesis" in window)) return;
-    try {
-      window.speechSynthesis.cancel();
-      var u = new SpeechSynthesisUtterance(lastMeaning);
-      u.lang = "ko-KR";
-      window.speechSynthesis.speak(u);
-    } catch(e){}
-  });
+  speakBtn.addEventListener("click", function(){ speakText(lastMeaning); });
 
   // ---- 히스토리 (이 기기에만 저장) ----
   var HKEY = "ggmm_history_v1";
